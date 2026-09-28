@@ -86,6 +86,8 @@ function spawnPickup() {
 }
 
 function flip() {
+  // Ignore input until the game-over overlay appears, so a last-second dodge tap doesn't instantly restart.
+  if (state === 'over' && $overlay.classList.contains('hidden')) return;
   if (state !== 'play') { reset(); state = 'play'; $overlay.classList.add('hidden'); return; }
   dir *= -1;
   const p = shipPos(); burst(p.x, p.y, '#7cf7d4', 6, 1.5);
