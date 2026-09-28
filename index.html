@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Orbit Dodge</title>
+<style>
+  :root { --bg: #0b0d1a; --fg: #e8eaff; --accent: #7cf7d4; --danger: #ff6b8b; --gold: #ffd166; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--fg);
+    font-family: ui-rounded, "SF Pro Rounded", system-ui, sans-serif; overflow: hidden;
+    user-select: none; -webkit-user-select: none; touch-action: none; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #hud { position: fixed; top: 16px; left: 0; right: 0; display: flex; justify-content: space-between;
+    padding: 0 20px; font-size: 18px; font-weight: 700; pointer-events: none; }
+  #hud .best { opacity: .6; }
+  #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 14px; text-align: center; pointer-events: none; padding: 16px; }
+  #overlay h1 { font-size: clamp(36px, 8vw, 64px); letter-spacing: 2px; color: var(--accent);
+    text-shadow: 0 0 24px rgba(124,247,212,.5); }
+  #overlay p { font-size: 18px; opacity: .85; max-width: 420px; line-height: 1.5; }
+  #overlay .cta { margin-top: 8px; font-weight: 700; animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"><span id="score">0</span><span class="best">Best <span id="best">0</span></span></div>
+<div id="overlay">
+  <h1>ORBIT DODGE</h1>
+  <p id="msg">Your ship circles the planet. <b>Tap, click, or press Space</b> to reverse direction.<br>
+    Dodge the <span style="color:var(--danger)">comets</span>, grab the <span style="color:var(--gold)">stars</span>.</p>
+  <p class="cta">Tap to start</p>
+</div>
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const $score = document.getElementById('score'), $best = document.getElementById('best');
+const $overlay = document.getElementById('overlay'), $msg = document.getElementById('msg');
+
+let W, H, cx, cy, R, dpr;
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  cx = W / 2; cy = H / 2; R = Math.min(W, H) * 0.28;
+}
+addEventListener('resize', resize); resize();
+
+let best = 0;
+try { best = +localStorage.getItem('orbitDodgeBest') || 0; } catch {}
+$best.textContent = best;
+
+const bgStars = Array.from({ length: 120 }, () => ({ x: Math.random(), y: Math.random(), r: Math.random() * 1.4 + .3, t: Math.random() * 6 }));
+
+let state = 'menu', angle, dir, speed, comets, pickups, particles, score, elapsed, spawnT, pickupT, shake;
+
+function reset() {
+  angle = -Math.PI / 2; dir = 1; speed = 2.2;
+  comets = []; pickups = []; particles = [];
+  score = 0; elapsed = 0; spawnT = 1; pickupT = 3; shake = 0;
+}
+reset();
+
+function burst(x, y, color, n = 18, power = 3) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, s = Math.random() * power + .5;
+    particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 1, color });
+  }
+}
+
+function spawnComet() {
+  // Start off-screen, aim at a point near the orbit ring so it actually threatens the ship.
+  const a = Math.random() * Math.PI * 2, dist = Math.hypot(W, H) / 2 + 30;
+  const x = cx + Math.cos(a) * dist, y = cy + Math.sin(a) * dist;
+  const ta = Math.random() * Math.PI * 2, tr = R * (0.6 + Math.random() * 0.8);
+  const tx = cx + Math.cos(ta) * tr, ty = cy + Math.sin(ta) * tr;
+  const d = Math.hypot(tx - x, ty - y), v = 2.2 + Math.min(elapsed / 12, 4) + Math.random();
+  comets.push({ x, y, vx: (tx - x) / d * v, vy: (ty - y) / d * v, r: 7 + Math.random() * 7, trail: [] });
+}
+
+function spawnPickup() {
+  const a = Math.random() * Math.PI * 2;
+  pickups.push({ a, life: 6, spin: 0 });
+}
+
+function flip() {
+  if (state !== 'play') { reset(); state = 'play'; $overlay.classList.add('hidden'); return; }
+  dir *= -1;
+  const p = shipPos(); burst(p.x, p.y, '#7cf7d4', 6, 1.5);
+}
+addEventListener('pointerdown', e => { e.preventDefault(); flip(); });
+addEventListener('keydown', e => { if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); flip(); } });
+
+function shipPos() { return { x: cx + Math.cos(angle) * R, y: cy + Math.sin(angle) * R }; }
+
+function gameOver() {
+  state = 'over'; shake = 18;
+  const p = shipPos(); burst(p.x, p.y, '#ff6b8b', 40, 5);
+  const final = Math.floor(score);
+  let newBest = false;
+  if (final > best) { best = final; newBest = true; try { localStorage.setItem('orbitDodgeBest', best); } catch {} }
+  $best.textContent = best;
+  $msg.innerHTML = `Score <b>${final}</b>${newBest ? ' — <span style="color:var(--gold)">new best!</span>' : ''}`;
+  setTimeout(() => $overlay.classList.remove('hidden'), 500);
+}
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.05); last = now;
+  const k = dt * 60; // normalise to 60fps units
+
+  if (state === 'play') {
+    elapsed += dt;
+    speed = 2.2 + Math.min(elapsed / 20, 1.8);
+    angle += dir * speed * dt;
+    score += dt * 10;
+
+    spawnT -= dt;
+    if (spawnT <= 0) { spawnComet(); spawnT = Math.max(0.28, 1.1 - elapsed / 40); }
+    pickupT -= dt;
+    if (pickupT <= 0) { spawnPickup(); pickupT = 4 + Math.random() * 3; }
+
+    const s = shipPos();
+    for (const c of comets) {
+      c.x += c.vx * k; c.y += c.vy * k;
+      c.trail.push({ x: c.x, y: c.y }); if (c.trail.length > 14) c.trail.shift();
+      if (Math.hypot(c.x - s.x, c.y - s.y) < c.r + 8) { gameOver(); break; }
+    }
+    for (const p of pickups) {
+      p.life -= dt; p.spin += dt * 3;
+      const px = cx + Math.cos(p.a) * R, py = cy + Math.sin(p.a) * R;
+      if (Math.hypot(px - s.x, py - s.y) < 20) { p.life = -1; score += 50; burst(px, py, '#ffd166', 24, 3); }
+    }
+  }
+  comets = comets.filter(c => Math.abs(c.x - cx) < W && Math.abs(c.y - cy) < H);
+  pickups = pickups.filter(p => p.life > 0);
+  for (const p of particles) { p.x += p.vx * k; p.y += p.vy * k; p.vx *= .96; p.vy *= .96; p.life -= dt * 1.5; }
+  particles = particles.filter(p => p.life > 0);
+  shake *= 0.9;
+
+  draw(now / 1000);
+  $score.textContent = Math.floor(score);
+  requestAnimationFrame(frame);
+}
+
+function draw(t) {
+  ctx.fillStyle = '#0b0d1a'; ctx.fillRect(0, 0, W, H);
+  ctx.save();
+  if (shake > .5) ctx.translate((Math.random() - .5) * shake, (Math.random() - .5) * shake);
+
+  for (const s of bgStars) {
+    ctx.globalAlpha = .35 + .35 * Math.sin(t * 1.5 + s.t);
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(s.x * W, s.y * H, s.r, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Planet
+  const g = ctx.createRadialGradient(cx - R * .15, cy - R * .15, 4, cx, cy, R * .45);
+  g.addColorStop(0, '#9b8cff'); g.addColorStop(1, '#3a2f8f');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, R * .42, 0, 7); ctx.fill();
+
+  // Orbit ring
+  ctx.strokeStyle = 'rgba(124,247,212,.18)'; ctx.lineWidth = 2; ctx.setLineDash([6, 10]);
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+
+  // Pickups
+  for (const p of pickups) {
+    const x = cx + Math.cos(p.a) * R, y = cy + Math.sin(p.a) * R;
+    ctx.globalAlpha = Math.min(1, p.life);
+    drawStar(x, y, 10, p.spin, '#ffd166');
+  }
+  ctx.globalAlpha = 1;
+
+  // Comets
+  for (const c of comets) {
+    c.trail.forEach((pt, i) => {
+      ctx.globalAlpha = i / c.trail.length * .5;
+      ctx.fillStyle = '#ff6b8b';
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, c.r * i / c.trail.length, 0, 7); ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#ff8fa6'; ctx.shadowColor = '#ff6b8b'; ctx.shadowBlur = 16;
+    ctx.beginPath(); ctx.arc(c.x, c.y, c.r, 0, 7); ctx.fill(); ctx.shadowBlur = 0;
+  }
+
+  // Ship
+  if (state !== 'over') {
+    const s = shipPos(), heading = angle + dir * Math.PI / 2;
+    ctx.save(); ctx.translate(s.x, s.y); ctx.rotate(heading);
+    ctx.fillStyle = '#7cf7d4'; ctx.shadowColor = '#7cf7d4'; ctx.shadowBlur = 20;
+    ctx.beginPath(); ctx.moveTo(12, 0); ctx.lineTo(-8, 8); ctx.lineTo(-4, 0); ctx.lineTo(-8, -8); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  for (const p of particles) {
+    ctx.globalAlpha = Math.max(0, p.life); ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 2.5, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+function drawStar(x, y, r, rot, color) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+  ctx.fillStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 14;
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const rr = i % 2 ? r * .45 : r, a = i * Math.PI / 5;
+    ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+  }
+  ctx.closePath(); ctx.fill(); ctx.restore();
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
